@@ -91,7 +91,7 @@
     <section class="panel">
       <div class="section-label">01 · Source</div>
       <div class="file-row">
-        <label class="btn btn-primary" for="fileInput">Choose video</label>
+        <button type="button" class="btn btn-primary" id="chooseVideoBtn">Choose video</button>
         <input type="file" id="fileInput" accept="video/*">
         <span class="status" id="fileStatus">No video loaded.</span>
       </div>
@@ -219,6 +219,7 @@
 <script>
 (function(){
   const fileInput = document.getElementById('fileInput');
+  const chooseVideoBtn = document.getElementById('chooseVideoBtn');
   const fileStatus = document.getElementById('fileStatus');
   const srcVideo = document.getElementById('srcVideo');
   const procCanvas = document.getElementById('procCanvas');
@@ -570,6 +571,8 @@ void loop() {
   }
 
   // ---- Wiring ----
+  chooseVideoBtn.addEventListener('click', ()=> fileInput.click());
+
   fileInput.addEventListener('change', e=>{
     const file = e.target.files[0];
     if(!file) return;
