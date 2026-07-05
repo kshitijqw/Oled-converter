@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -73,6 +74,7 @@
 
   .export-row{ display:flex; gap:10px; flex-wrap:wrap; }
   .size-note{ font-family:var(--mono); font-size:11px; color:var(--ink-muted); }
+  .size-note.warn{ color:var(--danger); }
 
   .hint{ font-family:var(--sans); font-size:11.5px; color:var(--ink-muted); margin-top:4px; line-height:1.4; }
   input[type=range]:focus-visible, select:focus-visible, .btn:focus-visible, input[type=number]:focus-visible{ outline:2px solid var(--phosphor); outline-offset:2px; }
@@ -164,6 +166,18 @@
       </div>
       <div class="hint" id="frameEstimate">Load a video to estimate frame count.</div>
 
+      <div class="section-label">05 · Target board</div>
+      <div class="field">
+        <label>Board</label>
+        <select id="boardSelect">
+          <option value="esp32">ESP32 (DevKit / generic)</option>
+          <option value="esp8266">ESP8266 (NodeMCU / D1 Mini)</option>
+          <option value="uno">Arduino Uno</option>
+          <option value="nano">Arduino Nano</option>
+        </select>
+      </div>
+      <div class="hint" id="boardHint"></div>
+
       <div style="margin-top:20px;">
         <button class="btn btn-primary" id="extractBtn" disabled style="width:100%;">Extract frames</button>
       </div>
@@ -240,8 +254,17 @@
   const frameLabel = document.getElementById('frameLabel');
   const exportBtn = document.getElementById('exportBtn');
   const sizeNote = document.getElementById('sizeNote');
+  const boardSelect = document.getElementById('boardSelect');
+  const boardHint = document.getElementById('boardHint');
 
-  let settings = { width:128, height:64, fit:'cover', panX:50, panY:50, dither:'floyd', threshold:128, brightness:0, contrast:100, invert:false, fps:12 };
+  const boardConfigs = {
+    esp32:   { label:'ESP32',        wireInit:'Wire.begin(); // default pins: SDA=21, SCL=22', flashBudget: 1310720, note:'Plenty of flash and RAM on ESP32 — handles long, high-fps animations easily.' },
+    esp8266: { label:'ESP8266',      wireInit:'Wire.begin(D2, D1); // NodeMCU/D1 Mini labels: SDA=D2, SCL=D1', flashBudget: 1048576, note:'Comfortable for a few hundred frames at 128×64 on ESP8266.' },
+    uno:     { label:'Arduino Uno',  wireInit:'Wire.begin(); // fixed I2C pins: SDA=A4, SCL=A5', flashBudget: 28000, note:'Very tight — only ~2KB RAM and ~30KB usable flash total, shared with the whole sketch and libraries. Use 128×32, a low FPS, and keep it to roughly 15–20 frames.' },
+    nano:    { label:'Arduino Nano', wireInit:'Wire.begin(); // fixed I2C pins: SDA=A4, SCL=A5', flashBudget: 28000, note:'Same tight limits as Uno — ~2KB RAM and ~30KB usable flash. Keep resolution at 128×32 and frame count low.' }
+  };
+
+  let settings = { width:128, height:64, fit:'cover', panX:50, panY:50, dither:'floyd', threshold:128, brightness:0, contrast:100, invert:false, fps:12, board:'esp32' };
   let frames = [];
   let videoLoaded = false;
   let playTimer = null, playIdx = 0;
@@ -264,6 +287,7 @@
     settings.contrast = parseInt(contrastRange.value);
     settings.invert = invertCheck.checked;
     settings.fps = parseInt(fpsRange.value);
+    settings.board = boardSelect.value;
 
     panWrap.classList.toggle('disabled-note', settings.fit !== 'cover');
     customResRow.style.display = resSelect.value === 'custom' ? 'grid' : 'none';
@@ -274,6 +298,10 @@
     brightnessVal.textContent = settings.brightness;
     contrastVal.textContent = settings.contrast + '%';
     fpsVal.textContent = settings.fps;
+  }
+
+  function updateBoardHint(){
+    boardHint.textContent = boardConfigs[settings.board].note;
   }
 
   function updateFrameEstimate(){
@@ -445,11 +473,15 @@
   }
 
   function updateSizeNote(){
-    if(!frames.length){ sizeNote.textContent = 'Extract frames to see flash size estimate.'; return; }
+    if(!frames.length){ sizeNote.textContent = 'Extract frames to see flash size estimate.'; sizeNote.classList.remove('warn'); return; }
     const bytesPerRow = Math.ceil(settings.width/8);
     const bytesPerFrame = bytesPerRow*settings.height;
     const totalBytes = bytesPerFrame*frames.length;
-    sizeNote.textContent = `${frames.length} frames · ${(totalBytes/1024).toFixed(1)} KB total (fits easily on ESP32 flash).`;
+    const cfg = boardConfigs[settings.board];
+    const fits = totalBytes <= cfg.flashBudget;
+    sizeNote.textContent = `${frames.length} frames · ${(totalBytes/1024).toFixed(1)} KB total — ` +
+      (fits ? `fits comfortably on ${cfg.label}.` : `likely too large for ${cfg.label} (~${(cfg.flashBudget/1024).toFixed(0)} KB usable). Reduce frames, FPS, or resolution.`);
+    sizeNote.classList.toggle('warn', !fits);
   }
 
   function stopPlayback(){
@@ -506,8 +538,9 @@ ${arrText}};
 `;
     downloadText('frames.h', header);
 
-    const ino = `// Playback sketch for frames.h
-// Wiring: OLED SDA -> ESP32 SDA, SCL -> ESP32 SCL, VCC -> 3V3, GND -> GND
+    const cfg = boardConfigs[settings.board];
+    const ino = `// Playback sketch for frames.h — target board: ${cfg.label}
+// Wiring: OLED VCC -> 3V3 (or 5V if your module supports it), GND -> GND, plus I2C pins below
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -517,9 +550,9 @@ ${arrText}};
 Adafruit_SSD1306 display(FRAME_WIDTH, FRAME_HEIGHT, &Wire, -1);
 
 void setup() {
-  Wire.begin();
+  ${cfg.wireInit}
   if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    for (;;); // halt: display not found at this I2C address
+    for (;;); // halt: display not found — check wiring / I2C address (try 0x3D if blank)
   }
   display.clearDisplay();
   display.display();
@@ -596,12 +629,18 @@ void loop() {
     readSettingsFromUI();
     updateFrameEstimate();
   });
+  boardSelect.addEventListener('change', ()=>{
+    readSettingsFromUI();
+    updateBoardHint();
+    updateSizeNote();
+  });
 
   extractBtn.addEventListener('click', extractFrames);
   playBtn.addEventListener('click', togglePlay);
   exportBtn.addEventListener('click', exportFiles);
 
   readSettingsFromUI();
+  updateBoardHint();
 })();
 </script>
 </body>
